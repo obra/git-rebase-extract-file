@@ -148,6 +148,15 @@ func (e *Extractor) DryRun(from, to string) (string, error) {
 
 // Extract performs the actual rebase with commit splitting
 func (e *Extractor) Extract(from, to string) error {
+	// Capture original HEAD before making any changes
+	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = e.repoDir
+	originalHeadOutput, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("failed to get original HEAD: %w", err)
+	}
+	originalHead := strings.TrimSpace(string(originalHeadOutput))
+
 	analyzer := NewAnalyzer(e.repoDir, e.targetFile)
 	commits, err := analyzer.AnalyzeRange(from, to)
 	if err != nil {
@@ -169,7 +178,17 @@ func (e *Extractor) Extract(from, to string) error {
 	}
 
 	// Start interactive rebase
-	return e.performRebase(from, commits)
+	err = e.performRebase(from, commits)
+	if err != nil {
+		return err
+	}
+
+	// Print revert instruction
+	fmt.Printf("\n✅ Successfully extracted changes to %s into separate commits.\n", e.targetFile)
+	fmt.Printf("To revert this branch to its previous state, run:\n")
+	fmt.Printf("  git reset --hard %s\n\n", originalHead)
+
+	return nil
 }
 
 // performRebase executes the git rebase with commit splitting

@@ -138,3 +138,15 @@ func (r *TestRepo) gitOutput(args ...string) (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
+// GetCurrentHead returns the current HEAD commit hash
+func (r *TestRepo) GetCurrentHead() string {
+	r.t.Helper()
+	
+	output, err := r.gitOutput("rev-parse", "HEAD")
+	if err != nil {
+		r.t.Fatalf("Failed to get HEAD commit: %v", err)
+	}
+	
+	return strings.TrimSpace(output)
+}
+
