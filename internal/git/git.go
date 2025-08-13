@@ -1,6 +1,7 @@
 // ABOUTME: Git operations and utilities for repository manipulation
 // ABOUTME: Provides safe wrappers around git commands with proper error handling
 
+// Package git provides git repository operations and utilities.
 package git
 
 import (
@@ -28,11 +29,12 @@ func (r *Repository) RunGit(args ...string) error {
 func (r *Repository) GitOutput(args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = r.Dir
-	
+
 	output, err := cmd.Output()
 	if err != nil {
 		return "", err
 	}
-	
+
 	return string(output), nil
 }
+

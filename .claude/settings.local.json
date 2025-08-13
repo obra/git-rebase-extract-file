@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh repo create:*)",
+      "Bash(go mod init:*)",
+      "Bash(mkdir:*)",
+      "Bash(go mod:*)",
+      "Bash(make test:*)",
+      "Bash(git add:*)",
+      "Bash(make lint:*)",
+      "Bash(make fmt:*)",
+      "Bash(make:*)",
+      "Bash(./bin/git-rebase-extract-file --help)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

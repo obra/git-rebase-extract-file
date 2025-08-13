@@ -1,6 +1,7 @@
 // ABOUTME: Entry point for git-rebase-extract-file command
 // ABOUTME: Handles CLI parsing and delegates to core rebase logic
 
+// Package main provides the CLI interface for git-rebase-extract-file
 package main
 
 import (
@@ -29,18 +30,18 @@ func init() {
 	rootCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview what would be done without making changes")
 }
 
-func run(cmd *cobra.Command, args []string) error {
+func run(_ *cobra.Command, args []string) error {
 	previousRev := args[0]
 	filePath := args[1]
-	
+
 	// Get current working directory
 	wd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("failed to get working directory: %w", err)
 	}
-	
+
 	extractor := rebase.NewExtractor(wd, filePath)
-	
+
 	if dryRun {
 		output, err := extractor.DryRun(previousRev, "HEAD")
 		if err != nil {
@@ -49,10 +50,10 @@ func run(cmd *cobra.Command, args []string) error {
 		fmt.Print(output)
 		return nil
 	}
-	
-	// TODO: Implement actual rebase
-	return fmt.Errorf("actual rebase not implemented yet")
+
+	return extractor.Extract(previousRev, "HEAD")
 }
+
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
