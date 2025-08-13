@@ -1,0 +1,49 @@
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  enable:
+    - gofmt
+    - goimports
+    - govet
+    - staticcheck
+    - gosec
+    - errcheck
+    - ineffassign
+    - misspell
+    - gocritic
+    - revive
+    - unparam
+
+linters-settings:
+  gocritic:
+    enabled-checks:
+      - appendAssign
+      - assignOp
+      - captLocal
+      - commentedOutImport
+      - deprecatedComment
+      - dupImport
+      - emptyFallthrough
+      - emptyStringTest
+      - equalFold
+      - flagDeref
+      - indexAlloc
+      - initClause
+      - methodExprCall
+      - nestingReduce
+      - newDeref
+      - nilValReturn
+      - rangeExprCopy
+      - rangeValCopy
+      - regexpMust
+      - sloppyLen
+      - stringXbytes
+      - typeAssertChain
+      - underef
+      - unlambda
+      - unslice
+
+issues:
+  exclude-use-default: false
