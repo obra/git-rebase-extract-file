@@ -1,5 +1,7 @@
 # git-rebase-extract-file
 
+> ⚠️ **This tool was vibe-coded and you should trust it as far as you can throw it.** While it has comprehensive tests and follows best practices, it manipulates your git history. Always use `--dry-run` first and ensure you have backups.
+
 A git command that performs an interactive rebase to automatically split commits by extracting changes to a specific file into separate commits, while preserving all original metadata.
 
 [![CI](https://github.com/obra/git-rebase-extract-file/actions/workflows/ci.yml/badge.svg)](https://github.com/obra/git-rebase-extract-file/actions/workflows/ci.yml)
