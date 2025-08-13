@@ -233,7 +233,7 @@ func TestExtractFile_PrintsRevertInstructions(t *testing.T) {
 	// Create initial commit
 	repo.WriteFile("main.go", "package main\n")
 	baseCommit := repo.Commit("Initial commit")
-	
+
 	// Get the original HEAD hash before we make changes
 	originalHead := repo.GetCurrentHead()
 
@@ -244,7 +244,7 @@ func TestExtractFile_PrintsRevertInstructions(t *testing.T) {
 
 	// Capture stdout during extraction
 	extractor := NewExtractor(repo.Dir, "target.txt")
-	
+
 	// We can't easily capture stdout in tests, but we can verify the extraction works
 	// and that it would print the correct hash by checking the logic
 	err := extractor.Extract(baseCommit, "HEAD")
@@ -259,4 +259,3 @@ func TestExtractFile_PrintsRevertInstructions(t *testing.T) {
 		t.Error("HEAD should have changed after extraction")
 	}
 }
-

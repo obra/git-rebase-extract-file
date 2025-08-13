@@ -12,8 +12,8 @@ github.com/obra/git-rebase-extract-file/main.go:45.12,47.17 2 0
 github.com/obra/git-rebase-extract-file/main.go:47.17,49.4 1 0
 github.com/obra/git-rebase-extract-file/main.go:50.3,51.13 2 0
 github.com/obra/git-rebase-extract-file/main.go:54.2,54.47 1 0
-github.com/obra/git-rebase-extract-file/main.go:58.13,59.42 1 0
-github.com/obra/git-rebase-extract-file/main.go:59.42,62.3 2 0
+github.com/obra/git-rebase-extract-file/main.go:57.13,58.42 1 0
+github.com/obra/git-rebase-extract-file/main.go:58.42,61.3 2 0
 github.com/obra/git-rebase-extract-file/internal/testutils/testutils.go:22.42,26.16 3 0
 github.com/obra/git-rebase-extract-file/internal/testutils/testutils.go:26.16,28.3 1 0
 github.com/obra/git-rebase-extract-file/internal/testutils/testutils.go:30.2,35.19 5 0

@@ -10,7 +10,8 @@
       "Bash(make lint:*)",
       "Bash(make fmt:*)",
       "Bash(make:*)",
-      "Bash(./bin/git-rebase-extract-file --help)"
+      "Bash(./bin/git-rebase-extract-file --help)",
+      "Bash(gofmt:*)"
     ],
     "deny": [],
     "ask": []

@@ -54,7 +54,6 @@ func run(_ *cobra.Command, args []string) error {
 	return extractor.Extract(previousRev, "HEAD")
 }
 
-
 func main() {
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

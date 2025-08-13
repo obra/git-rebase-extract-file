@@ -296,4 +296,3 @@ func GenerateSplitMessages(original, targetFile string) (string, string) {
 
 	return firstMsg, secondMsg
 }
-

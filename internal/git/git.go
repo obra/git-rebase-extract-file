@@ -37,4 +37,3 @@ func (r *Repository) GitOutput(args ...string) (string, error) {
 
 	return string(output), nil
 }
-

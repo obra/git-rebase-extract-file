@@ -14,8 +14,17 @@ lint:
 
 # Format code
 fmt:
-	gofmt -w .
-	goimports -w .
+	gofmt -s -w .
+	$(shell go env GOPATH)/bin/goimports -w .
+
+# Check if code is formatted (for CI)
+fmt-check:
+	@if [ "$$(gofmt -s -l . | wc -l)" -gt 0 ]; then \
+		echo "The following files are not formatted:"; \
+		gofmt -s -l .; \
+		echo "Please run 'make fmt' to format them."; \
+		exit 1; \
+	fi
 
 # Clean build artifacts
 clean:
@@ -26,7 +35,7 @@ install: build
 	cp bin/git-rebase-extract-file $(shell go env GOPATH)/bin/
 
 # Run all quality checks
-check: fmt lint test
+check: fmt-check lint test
 
 # Show test coverage
 coverage: test
