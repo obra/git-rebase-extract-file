@@ -159,14 +159,17 @@ func (e *Extractor) Extract(from, to string) error {
 		return fmt.Errorf("working directory is not clean. Please commit or stash changes first:\n%s", string(statusOutput))
 	}
 
-	// Capture original HEAD before making any changes
+	// Capture original HEAD for recovery instructions and print them immediately
 	cmd = exec.Command("git", "rev-parse", "HEAD")
 	cmd.Dir = e.repoDir
-	originalHeadOutput, err := cmd.Output()
+	headOutput, err := cmd.Output()
 	if err != nil {
-		return fmt.Errorf("failed to get original HEAD: %w", err)
+		return fmt.Errorf("failed to get current HEAD: %w", err)
 	}
-	originalHead := strings.TrimSpace(string(originalHeadOutput))
+	originalHead := strings.TrimSpace(string(headOutput))
+	
+	// Print recovery instructions at the start so user knows how to get back
+	fmt.Printf("To recover the repository state: git reset --hard %s\n", originalHead)
 
 	analyzer := NewAnalyzer(e.repoDir, e.targetFile)
 	commits, err := analyzer.AnalyzeRange(from, to)
@@ -188,29 +191,33 @@ func (e *Extractor) Extract(from, to string) error {
 		return nil
 	}
 
-	// Start interactive rebase
-	err = e.performRebase(from, commits)
-	if err != nil {
-		return err
+	// Check for potential conflicts before starting
+	if conflicts := e.checkPotentialConflicts(from); len(conflicts) > 0 {
+		fmt.Printf("⚠️  Warning: Potential conflicts detected in:\n")
+		for _, conflict := range conflicts {
+			fmt.Printf("  - %s\n", conflict)
+		}
+		fmt.Printf("\nThese files have been modified in multiple commits and may cause conflicts.\n")
+		fmt.Printf("Consider resolving manually if the rebase fails.\n\n")
 	}
 
-	// Print revert instruction
-	fmt.Printf("\n✅ Successfully extracted changes to %s into separate commits.\n", e.targetFile)
-	fmt.Printf("To revert this branch to its previous state, run:\n")
-	fmt.Printf("  git reset --hard %s\n\n", originalHead)
+	// Perform the rebase with splitting
+	if err := e.performRebase(from, commits); err != nil {
+		fmt.Printf("\n🚨 Rebase failed. To recover:\n")
+		fmt.Printf("  git reset --hard %s\n", originalHead)
+		return fmt.Errorf("rebase failed: %w", err)
+	}
+
+	// Print success message with recovery info
+	fmt.Printf("\n✅ Successfully split commits. If you need to revert:\n")
+	fmt.Printf("  git reset --hard %s\n", originalHead)
 
 	return nil
 }
 
 // performRebase executes the git rebase with commit splitting
 func (e *Extractor) performRebase(from string, commits []CommitInfo) error {
-	// This is the complex part - we need to use git rebase --interactive
-	// with a custom sequence that splits the necessary commits
-
-	// For now, implement a simple approach using git cherry-pick
-	// to rebuild the history with split commits
-
-	// Get current branch name
+	// Get current branch name for backup
 	cmd := exec.Command("git", "branch", "--show-current")
 	cmd.Dir = e.repoDir
 	branchOutput, err := cmd.Output()
@@ -226,58 +233,135 @@ func (e *Extractor) performRebase(from string, commits []CommitInfo) error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to create backup branch: %w", err)
 	}
+	fmt.Printf("Created backup branch: %s\n", backupBranch)
 
-	// Reset to the base commit
-	cmd = exec.Command("git", "reset", "--hard", from)
-	cmd.Dir = e.repoDir
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to reset to base: %w", err)
-	}
-
-	// Replay commits, splitting as needed
-	for _, commit := range commits {
-		if err := e.replayCommit(commit); err != nil {
-			return fmt.Errorf("failed to replay commit %s: %w", commit.Hash, err)
+	// Process each commit that needs splitting using proper interactive rebase
+	// Work backwards through commits to maintain proper order
+	for i := len(commits) - 1; i >= 0; i-- {
+		commit := commits[i]
+		if commit.NeedsSplit {
+			if err := e.splitCommitUsingInteractiveRebase(commit, from); err != nil {
+				return fmt.Errorf("failed to split commit %s: %w", commit.Hash, err)
+			}
 		}
 	}
 
 	return nil
 }
 
-// replayCommit replays a single commit, splitting if necessary
-func (e *Extractor) replayCommit(commit CommitInfo) error {
-	if !commit.NeedsSplit {
-		// Simple cherry-pick for commits that don't need splitting
-		cmd := exec.Command("git", "cherry-pick", commit.Hash)
-		cmd.Dir = e.repoDir
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("cherry-pick failed for commit %s: %w\n\nTo recover: git cherry-pick --abort", commit.Hash, err)
-		}
-		return nil
+// splitCommitUsingInteractiveRebase splits a buried commit using interactive rebase
+func (e *Extractor) splitCommitUsingInteractiveRebase(commit CommitInfo, from string) error {
+	// Create a custom rebase sequence that marks our target commit for editing
+	// and picks all others
+	sequenceFile := fmt.Sprintf("/tmp/rebase-sequence-%d", os.Getpid())
+	defer os.Remove(sequenceFile)
+	
+	// Generate the rebase todo list
+	cmd := exec.Command("git", "log", "--reverse", "--format=%H %s", from+"..HEAD")
+	cmd.Dir = e.repoDir
+	output, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("failed to get commit list: %w", err)
 	}
-
-	// Split the commit
-	return e.splitCommit(commit)
-}
-
-// splitCommit splits a commit into two parts
-func (e *Extractor) splitCommit(commit CommitInfo) error {
-	// Apply all changes from the original commit
-	cmd := exec.Command("git", "cherry-pick", "--no-commit", commit.Hash)
+	
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	var sequence []string
+	
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, " ", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		hash := parts[0]
+		message := parts[1]
+		
+		if hash == commit.Hash {
+			// Mark this commit for editing
+			sequence = append(sequence, fmt.Sprintf("edit %s %s", hash[:7], message))
+		} else {
+			// Pick other commits normally
+			sequence = append(sequence, fmt.Sprintf("pick %s %s", hash[:7], message))
+		}
+	}
+	
+	// Write the sequence file
+	sequenceContent := strings.Join(sequence, "\n") + "\n"
+	if err := os.WriteFile(sequenceFile, []byte(sequenceContent), 0644); err != nil {
+		return fmt.Errorf("failed to write sequence file: %w", err)
+	}
+	
+	// Create a simple sequence editor that uses our pre-written file
+	editorScript := fmt.Sprintf("#!/bin/sh\ncp %s \"$1\"\n", sequenceFile)
+	editorPath := fmt.Sprintf("/tmp/rebase-editor-%d.sh", os.Getpid())
+	if err := os.WriteFile(editorPath, []byte(editorScript), 0755); err != nil {
+		return fmt.Errorf("failed to create editor script: %w", err)
+	}
+	defer os.Remove(editorPath)
+	
+	// Start the interactive rebase
+	cmd = exec.Command("git", "rebase", "-i", from)
+	cmd.Dir = e.repoDir
+	cmd.Env = append(os.Environ(), "GIT_SEQUENCE_EDITOR="+editorPath)
+	
+	if err := cmd.Run(); err != nil {
+		// Check if we're in a rebase state with conflicts
+		if isRebaseInProgress, conflictMsg := e.checkRebaseConflicts(); isRebaseInProgress {
+			return fmt.Errorf("rebase stopped due to conflicts:\n%s\n\nTo resolve:\n1. Manually resolve conflicts in the affected files\n2. Run: git add <resolved-files>\n3. Run: git rebase --continue\n4. Or run: git rebase --abort to cancel", conflictMsg)
+		}
+		return fmt.Errorf("failed to start interactive rebase: %w", err)
+	}
+	
+	// Check if rebase is still in progress (stopped at our edit point)
+	if isRebaseInProgress, _ := e.checkRebaseConflicts(); isRebaseInProgress {
+		// We're in edit mode, proceed with splitting
+		if err := e.splitCurrentCommit(commit); err != nil {
+			exec.Command("git", "rebase", "--abort").Run()
+			return fmt.Errorf("failed to split commit during rebase: %w", err)
+		}
+	} else {
+		// Rebase completed without stopping - this shouldn't happen with our edit command
+		return fmt.Errorf("rebase completed unexpectedly without stopping for editing")
+	}
+	
+	// Continue the rebase
+	cmd = exec.Command("git", "rebase", "--continue")
 	cmd.Dir = e.repoDir
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("cherry-pick failed for commit %s: %w\n\nTo recover: git reset --hard HEAD", commit.Hash, err)
+		return fmt.Errorf("failed to continue rebase: %w", err)
+	}
+	
+	return nil
+}
+
+// splitCurrentCommit splits the current commit during a rebase
+func (e *Extractor) splitCurrentCommit(commit CommitInfo) error {
+	// Reset the commit but keep the changes in the working directory
+	cmd := exec.Command("git", "reset", "HEAD^")
+	cmd.Dir = e.repoDir
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to reset commit: %w", err)
+	}
+	
+	firstMsg, secondMsg := GenerateSplitMessages(commit.Message, e.targetFile)
+
+	// Stage all files except the target file
+	cmd = exec.Command("git", "add", ".")
+	cmd.Dir = e.repoDir
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to stage files: %w", err)
 	}
 
-	// Reset the target file to exclude it from the first commit
+	// Unstage the target file
 	cmd = exec.Command("git", "reset", "HEAD", e.targetFile)
 	cmd.Dir = e.repoDir
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to reset target file: %w", err)
+		return fmt.Errorf("failed to unstage target file: %w", err)
 	}
 
-	// Create first commit with everything except target file
-	firstMsg, secondMsg := GenerateSplitMessages(commit.Message, e.targetFile)
+	// Create first commit (everything except target file)
 	cmd = exec.Command("git", "commit", "-m", firstMsg)
 	cmd.Dir = e.repoDir
 	if err := cmd.Run(); err != nil {
@@ -300,6 +384,57 @@ func (e *Extractor) splitCommit(commit CommitInfo) error {
 	return nil
 }
 
+// splitHeadCommit splits the HEAD commit
+func (e *Extractor) splitHeadCommit(commit CommitInfo) error {
+	// Reset the commit but keep changes in working directory
+	cmd := exec.Command("git", "reset", "--soft", "HEAD~1")
+	cmd.Dir = e.repoDir
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to reset HEAD commit: %w", err)
+	}
+
+	firstMsg, secondMsg := GenerateSplitMessages(commit.Message, e.targetFile)
+
+	// Stage all files except the target file
+	cmd = exec.Command("git", "add", ".")
+	cmd.Dir = e.repoDir
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to stage files: %w", err)
+	}
+
+	// Unstage the target file
+	cmd = exec.Command("git", "reset", "HEAD", e.targetFile)
+	cmd.Dir = e.repoDir
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to unstage target file: %w", err)
+	}
+
+	// Create first commit (everything except target file)
+	cmd = exec.Command("git", "commit", "-m", firstMsg)
+	cmd.Dir = e.repoDir
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to create first split commit: %w", err)
+	}
+
+	// Add and commit the target file
+	cmd = exec.Command("git", "add", e.targetFile)
+	cmd.Dir = e.repoDir
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to stage target file: %w", err)
+	}
+
+	cmd = exec.Command("git", "commit", "-m", secondMsg)
+	cmd.Dir = e.repoDir
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to create second split commit: %w", err)
+	}
+
+	return nil
+}
+
+
+
+
 // GenerateSplitMessages creates the two commit messages for a split
 func GenerateSplitMessages(original, targetFile string) (string, string) {
 	// First commit: original + split notice
@@ -310,3 +445,89 @@ func GenerateSplitMessages(original, targetFile string) (string, string) {
 
 	return firstMsg, secondMsg
 }
+
+// checkRebaseConflicts checks if we're in a rebase state and returns conflict information
+func (e *Extractor) checkRebaseConflicts() (bool, string) {
+	// Check if rebase is in progress by looking for .git/rebase-merge directory
+	rebaseMergeDir := fmt.Sprintf("%s/.git/rebase-merge", e.repoDir)
+	if _, err := os.Stat(rebaseMergeDir); os.IsNotExist(err) {
+		return false, ""
+	}
+
+	// Get status to check for conflicts
+	cmd := exec.Command("git", "status", "--porcelain")
+	cmd.Dir = e.repoDir
+	output, err := cmd.Output()
+	if err != nil {
+		return true, "Unable to check git status"
+	}
+
+	status := strings.TrimSpace(string(output))
+	if status == "" {
+		return true, "Rebase in progress - ready for editing"
+	}
+
+	// Look for conflict markers in status
+	lines := strings.Split(status, "\n")
+	var conflicts []string
+	var staged []string
+	
+	for _, line := range lines {
+		if len(line) < 3 {
+			continue
+		}
+		
+		// Parse git status format: XY filename
+		statusCode := line[:2]
+		filename := line[3:]
+		
+		if strings.Contains(statusCode, "U") || statusCode == "AA" || statusCode == "DD" {
+			conflicts = append(conflicts, filename)
+		} else if statusCode[0] != ' ' && statusCode[0] != '?' {
+			staged = append(staged, filename)
+		}
+	}
+
+	if len(conflicts) > 0 {
+		return true, fmt.Sprintf("Merge conflicts in: %s", strings.Join(conflicts, ", "))
+	}
+	
+	if len(staged) > 0 {
+		return true, fmt.Sprintf("Changes ready to commit: %s", strings.Join(staged, ", "))
+	}
+	
+	return true, "Rebase in progress"
+}
+
+// checkPotentialConflicts identifies files that might cause conflicts during rebase
+func (e *Extractor) checkPotentialConflicts(from string) []string {
+	// Get all files modified in the range
+	cmd := exec.Command("git", "log", "--name-only", "--format=", from+"..HEAD")
+	cmd.Dir = e.repoDir
+	output, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+
+	// Count occurrences of each file
+	fileCount := make(map[string]int)
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			fileCount[line]++
+		}
+	}
+
+	// Find files modified in multiple commits
+	var potentialConflicts []string
+	for file, count := range fileCount {
+		if count > 1 {
+			potentialConflicts = append(potentialConflicts, file)
+		}
+	}
+
+	return potentialConflicts
+}
+
