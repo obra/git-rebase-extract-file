@@ -148,8 +148,19 @@ func (e *Extractor) DryRun(from, to string) (string, error) {
 
 // Extract performs the actual rebase with commit splitting
 func (e *Extractor) Extract(from, to string) error {
+	// Check for clean working directory
+	cmd := exec.Command("git", "status", "--porcelain")
+	cmd.Dir = e.repoDir
+	statusOutput, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("failed to check git status: %w", err)
+	}
+	if len(strings.TrimSpace(string(statusOutput))) > 0 {
+		return fmt.Errorf("working directory is not clean. Please commit or stash changes first:\n%s", string(statusOutput))
+	}
+
 	// Capture original HEAD before making any changes
-	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd = exec.Command("git", "rev-parse", "HEAD")
 	cmd.Dir = e.repoDir
 	originalHeadOutput, err := cmd.Output()
 	if err != nil {
@@ -239,7 +250,10 @@ func (e *Extractor) replayCommit(commit CommitInfo) error {
 		// Simple cherry-pick for commits that don't need splitting
 		cmd := exec.Command("git", "cherry-pick", commit.Hash)
 		cmd.Dir = e.repoDir
-		return cmd.Run()
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("cherry-pick failed for commit %s: %w\n\nTo recover: git cherry-pick --abort", commit.Hash, err)
+		}
+		return nil
 	}
 
 	// Split the commit
@@ -252,7 +266,7 @@ func (e *Extractor) splitCommit(commit CommitInfo) error {
 	cmd := exec.Command("git", "cherry-pick", "--no-commit", commit.Hash)
 	cmd.Dir = e.repoDir
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to apply commit changes: %w", err)
+		return fmt.Errorf("cherry-pick failed for commit %s: %w\n\nTo recover: git reset --hard HEAD", commit.Hash, err)
 	}
 
 	// Reset the target file to exclude it from the first commit
