@@ -157,7 +157,7 @@ func TestCommitMessageGeneration(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			first, second := GenerateSplitMessages(tt.original, tt.targetFile)
+			first, second := GenerateSplitMessages(tt.original, []string{tt.targetFile})
 
 			if first != tt.expectFirst {
 				t.Errorf("First message mismatch:\nExpected: %q\nGot: %q", tt.expectFirst, first)
@@ -256,5 +256,45 @@ func TestExtractFile_PrintsRevertInstructions(t *testing.T) {
 	// Should have 2 commits (the mixed commit was split into 2)
 	if len(commits) != 2 {
 		t.Fatalf("Expected 2 commits after splitting, got %d", len(commits))
+	}
+}
+
+// Test multi-file message generation  
+func TestMultiFileMessageGeneration(t *testing.T) {
+	tests := []struct {
+		name         string
+		original     string
+		targetFiles  []string
+		expectFirst  string
+		expectSecond string
+	}{
+		{
+			name:         "single file",
+			original:     "Add feature",
+			targetFiles:  []string{"src/component.tsx"},
+			expectFirst:  "Add feature\n\nChanges to src/component.tsx split into a separate commit",
+			expectSecond: "src/component.tsx: Add feature",
+		},
+		{
+			name:         "multiple files",
+			original:     "Fix bug",
+			targetFiles:  []string{"src/component1.tsx", "src/component2.tsx"},
+			expectFirst:  "Fix bug\n\nChanges to target files split into a separate commit",
+			expectSecond: "target files: Fix bug",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			first, second := GenerateSplitMessages(tt.original, tt.targetFiles)
+
+			if first != tt.expectFirst {
+				t.Errorf("First message mismatch:\nExpected: %q\nGot: %q", tt.expectFirst, first)
+			}
+
+			if second != tt.expectSecond {
+				t.Errorf("Second message mismatch:\nExpected: %q\nGot: %q", tt.expectSecond, second)
+			}
+		})
 	}
 }

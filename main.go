@@ -17,12 +17,17 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "git-rebase-extract-file [--dry-run] <previous-rev> <file-path>",
-	Short: "Split commits by extracting changes to a specific file",
+	Use:   "git-rebase-extract-file [--dry-run] <previous-rev> <file-path> [file-path...]",
+	Short: "Split commits by extracting changes to specified files/directories",
 	Long: `git-rebase-extract-file performs an interactive rebase that automatically
-splits commits containing changes to a specified file. The changes to the target
-file are extracted into separate commits while preserving all original metadata.`,
-	Args: cobra.ExactArgs(2),
+splits commits containing changes to specified files or directories. The changes to the target
+files are extracted into separate commits while preserving all original metadata.
+
+Examples:
+  git-rebase-extract-file main~5 src/component.tsx
+  git-rebase-extract-file main~5 src/component1.tsx src/component2.tsx
+  git-rebase-extract-file main~5 src/components/ lib/utils.ts`,
+	Args: cobra.MinimumNArgs(2),
 	RunE: run,
 }
 
@@ -32,7 +37,7 @@ func init() {
 
 func run(_ *cobra.Command, args []string) error {
 	previousRev := args[0]
-	filePath := args[1]
+	filePaths := args[1:]
 
 	// Get current working directory
 	wd, err := os.Getwd()
@@ -40,7 +45,7 @@ func run(_ *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get working directory: %w", err)
 	}
 
-	extractor := rebase.NewExtractor(wd, filePath)
+	extractor := rebase.NewExtractor(wd, filePaths...)
 
 	if dryRun {
 		output, err := extractor.DryRun(previousRev, "HEAD")

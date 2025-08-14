@@ -22,15 +22,15 @@ type CommitInfo struct {
 
 // Analyzer analyzes commits to determine which need splitting
 type Analyzer struct {
-	repoDir    string
-	targetFile string
+	repoDir     string
+	targetFiles []string
 }
 
 // NewAnalyzer creates a new commit analyzer
-func NewAnalyzer(repoDir, targetFile string) *Analyzer {
+func NewAnalyzer(repoDir string, targetFiles ...string) *Analyzer {
 	return &Analyzer{
-		repoDir:    repoDir,
-		targetFile: targetFile,
+		repoDir:     repoDir,
+		targetFiles: targetFiles,
 	}
 }
 
@@ -78,12 +78,12 @@ func (a *Analyzer) analyzeCommit(hash string) (CommitInfo, error) {
 
 	files := strings.Fields(strings.TrimSpace(string(filesOutput)))
 
-	// Check if target file is in the list and if there are other files
+	// Check if any target files are in the list and if there are other files
 	hasTargetFile := false
 	hasOtherFiles := false
 
 	for _, file := range files {
-		if file == a.targetFile {
+		if a.isTargetFile(file) {
 			hasTargetFile = true
 		} else {
 			hasOtherFiles = true
@@ -98,23 +98,38 @@ func (a *Analyzer) analyzeCommit(hash string) (CommitInfo, error) {
 	}, nil
 }
 
+// isTargetFile checks if a file matches any of the target file patterns
+func (a *Analyzer) isTargetFile(file string) bool {
+	for _, target := range a.targetFiles {
+		// Exact match
+		if file == target {
+			return true
+		}
+		// Directory prefix match (e.g., "src/" matches "src/component.tsx")
+		if strings.HasSuffix(target, "/") && strings.HasPrefix(file, target) {
+			return true
+		}
+	}
+	return false
+}
+
 // Extractor handles the actual rebase and splitting
 type Extractor struct {
-	repoDir    string
-	targetFile string
+	repoDir     string
+	targetFiles []string
 }
 
 // NewExtractor creates a new commit extractor
-func NewExtractor(repoDir, targetFile string) *Extractor {
+func NewExtractor(repoDir string, targetFiles ...string) *Extractor {
 	return &Extractor{
-		repoDir:    repoDir,
-		targetFile: targetFile,
+		repoDir:     repoDir,
+		targetFiles: targetFiles,
 	}
 }
 
 // DryRun shows what would be done without making changes
 func (e *Extractor) DryRun(from, to string) (string, error) {
-	analyzer := NewAnalyzer(e.repoDir, e.targetFile)
+	analyzer := NewAnalyzer(e.repoDir, e.targetFiles...)
 	commits, err := analyzer.AnalyzeRange(from, to)
 	if err != nil {
 		return "", fmt.Errorf("failed to analyze commits: %w", err)
@@ -134,7 +149,7 @@ func (e *Extractor) DryRun(from, to string) (string, error) {
 	// Show details for each commit that would be split
 	for _, commit := range commits {
 		if commit.NeedsSplit {
-			firstMsg, secondMsg := GenerateSplitMessages(commit.Message, e.targetFile)
+			firstMsg, secondMsg := GenerateSplitMessages(commit.Message, e.targetFiles)
 
 			// Show original commit and its splits
 			fmt.Fprintf(&output, "Commit %s: \"%s\"\n", commit.Hash[:7], commit.Message)
@@ -171,7 +186,7 @@ func (e *Extractor) Extract(from, to string) error {
 	// Print recovery instructions at the start so user knows how to get back
 	fmt.Printf("To recover the repository state: git reset --hard %s\n", originalHead)
 
-	analyzer := NewAnalyzer(e.repoDir, e.targetFile)
+	analyzer := NewAnalyzer(e.repoDir, e.targetFiles...)
 	commits, err := analyzer.AnalyzeRange(from, to)
 	if err != nil {
 		return fmt.Errorf("failed to analyze commits: %w", err)
@@ -345,7 +360,7 @@ func (e *Extractor) splitCurrentCommit(commit CommitInfo) error {
 		return fmt.Errorf("failed to reset commit: %w", err)
 	}
 	
-	firstMsg, secondMsg := GenerateSplitMessages(commit.Message, e.targetFile)
+	firstMsg, secondMsg := GenerateSplitMessages(commit.Message, e.targetFiles)
 
 	// Stage all files except the target file
 	cmd = exec.Command("git", "add", ".")
@@ -354,11 +369,14 @@ func (e *Extractor) splitCurrentCommit(commit CommitInfo) error {
 		return fmt.Errorf("failed to stage files: %w", err)
 	}
 
-	// Unstage the target file
-	cmd = exec.Command("git", "reset", "HEAD", e.targetFile)
-	cmd.Dir = e.repoDir
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to unstage target file: %w", err)
+	// Unstage the target files
+	for _, targetFile := range e.targetFiles {
+		cmd = exec.Command("git", "reset", "HEAD", targetFile)
+		cmd.Dir = e.repoDir
+		if err := cmd.Run(); err != nil {
+			// Ignore errors for files that don't exist in this commit
+			continue
+		}
 	}
 
 	// Create first commit (everything except target file)
@@ -368,11 +386,14 @@ func (e *Extractor) splitCurrentCommit(commit CommitInfo) error {
 		return fmt.Errorf("failed to create first split commit: %w", err)
 	}
 
-	// Add and commit the target file
-	cmd = exec.Command("git", "add", e.targetFile)
-	cmd.Dir = e.repoDir
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to stage target file: %w", err)
+	// Add and commit the target files
+	for _, targetFile := range e.targetFiles {
+		cmd = exec.Command("git", "add", targetFile)
+		cmd.Dir = e.repoDir
+		if err := cmd.Run(); err != nil {
+			// Ignore errors for files that don't exist in this commit
+			continue
+		}
 	}
 
 	cmd = exec.Command("git", "commit", "-m", secondMsg)
@@ -393,7 +414,7 @@ func (e *Extractor) splitHeadCommit(commit CommitInfo) error {
 		return fmt.Errorf("failed to reset HEAD commit: %w", err)
 	}
 
-	firstMsg, secondMsg := GenerateSplitMessages(commit.Message, e.targetFile)
+	firstMsg, secondMsg := GenerateSplitMessages(commit.Message, e.targetFiles)
 
 	// Stage all files except the target file
 	cmd = exec.Command("git", "add", ".")
@@ -402,11 +423,14 @@ func (e *Extractor) splitHeadCommit(commit CommitInfo) error {
 		return fmt.Errorf("failed to stage files: %w", err)
 	}
 
-	// Unstage the target file
-	cmd = exec.Command("git", "reset", "HEAD", e.targetFile)
-	cmd.Dir = e.repoDir
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to unstage target file: %w", err)
+	// Unstage the target files
+	for _, targetFile := range e.targetFiles {
+		cmd = exec.Command("git", "reset", "HEAD", targetFile)
+		cmd.Dir = e.repoDir
+		if err := cmd.Run(); err != nil {
+			// Ignore errors for files that don't exist in this commit
+			continue
+		}
 	}
 
 	// Create first commit (everything except target file)
@@ -416,11 +440,14 @@ func (e *Extractor) splitHeadCommit(commit CommitInfo) error {
 		return fmt.Errorf("failed to create first split commit: %w", err)
 	}
 
-	// Add and commit the target file
-	cmd = exec.Command("git", "add", e.targetFile)
-	cmd.Dir = e.repoDir
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to stage target file: %w", err)
+	// Add and commit the target files
+	for _, targetFile := range e.targetFiles {
+		cmd = exec.Command("git", "add", targetFile)
+		cmd.Dir = e.repoDir
+		if err := cmd.Run(); err != nil {
+			// Ignore errors for files that don't exist in this commit
+			continue
+		}
 	}
 
 	cmd = exec.Command("git", "commit", "-m", secondMsg)
@@ -436,12 +463,22 @@ func (e *Extractor) splitHeadCommit(commit CommitInfo) error {
 
 
 // GenerateSplitMessages creates the two commit messages for a split
-func GenerateSplitMessages(original, targetFile string) (string, string) {
+func GenerateSplitMessages(original string, targetFiles []string) (string, string) {
 	// First commit: original + split notice
-	firstMsg := original + "\n\nChanges to " + targetFile + " split into a separate commit"
+	var firstMsg string
+	if len(targetFiles) == 1 {
+		firstMsg = original + "\n\nChanges to " + targetFiles[0] + " split into a separate commit"
+	} else {
+		firstMsg = original + "\n\nChanges to target files split into a separate commit"
+	}
 
 	// Second commit: prefixed original
-	secondMsg := targetFile + ": " + original
+	var secondMsg string
+	if len(targetFiles) == 1 {
+		secondMsg = targetFiles[0] + ": " + original
+	} else {
+		secondMsg = "target files: " + original
+	}
 
 	return firstMsg, secondMsg
 }

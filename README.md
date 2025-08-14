@@ -2,17 +2,17 @@
 
 > ⚠️ **This tool was vibe-coded and you should trust it as far as you can throw it.** While it has comprehensive tests and follows best practices, it manipulates your git history. Always use `--dry-run` first and ensure you have backups.
 
-A git command that performs an interactive rebase to automatically split commits by extracting changes to a specific file into separate commits, while preserving all original metadata.
+A git command that performs an interactive rebase to automatically split commits by extracting changes to specified files or directories into separate commits, while preserving all original metadata.
 
 [![CI](https://github.com/obra/git-rebase-extract-file/actions/workflows/ci.yml/badge.svg)](https://github.com/obra/git-rebase-extract-file/actions/workflows/ci.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/obra/git-rebase-extract-file)](https://goreportcard.com/report/github.com/obra/git-rebase-extract-file)
 
 ## Overview
 
-Have you ever made commits that mixed changes to a specific file with other changes, and later wished you could cleanly separate them? This tool automatically identifies such commits in a range and splits them into two commits:
+Have you ever made commits that mixed changes to specific files with other changes, and later wished you could cleanly separate them? This tool automatically identifies such commits in a range and splits them into two commits:
 
-1. **First commit**: All changes except the target file + notice about the split
-2. **Second commit**: Only changes to the target file with prefixed message
+1. **First commit**: All changes except the target files + notice about the split
+2. **Second commit**: Only changes to the target files with prefixed message
 
 ## Installation
 
@@ -36,13 +36,16 @@ sudo cp bin/git-rebase-extract-file /usr/local/bin/
 ### Basic Syntax
 
 ```bash
-git-rebase-extract-file [--dry-run] <previous-rev> <file-path>
+git-rebase-extract-file [--dry-run] <previous-rev> <file-path> [file-path...]
 ```
 
 ### Arguments
 
 - `<previous-rev>`: The commit to rebase from (exclusive). Tool processes commits in range `<previous-rev>..HEAD`
-- `<file-path>`: Path to the file to extract, specified from repository root (e.g., `src/components/Button.tsx`)
+- `<file-path>`: Path to files or directories to extract, specified from repository root
+  - Files: `src/components/Button.tsx` 
+  - Directories: `src/components/` (extracts all files in directory)
+  - Multiple: `src/component1.tsx src/component2.tsx lib/utils.ts`
 
 ### Options
 
@@ -87,6 +90,15 @@ git-rebase-extract-file main~5 src/auth.go
 # Split React component changes from other files
 git-rebase-extract-file feature-start src/components/Button.tsx
 
+# Extract multiple related components
+git-rebase-extract-file feature-start src/components/Button.tsx src/components/Modal.tsx
+
+# Extract entire directory of components
+git-rebase-extract-file feature-start src/components/
+
+# Mix files and directories  
+git-rebase-extract-file feature-start src/components/ lib/utils.ts
+
 # Extract configuration changes from a feature branch
 git-rebase-extract-file main config/database.yml
 
@@ -96,9 +108,9 @@ git-rebase-extract-file v1.0.0 README.md
 
 ## How It Works
 
-1. **Analysis**: Examines commits in the specified range to identify which ones modify both the target file and other files
+1. **Analysis**: Examines commits in the specified range to identify which ones modify both the target files and other files
 2. **Backup**: Creates a backup branch before making any changes
-3. **Reconstruction**: Uses `git cherry-pick` to rebuild the history:
+3. **Interactive Rebase**: Uses automated interactive rebase to rebuild the history:
    - For mixed commits: Splits into two separate commits
    - For single-purpose commits: Leaves unchanged
 4. **Preservation**: Maintains original commit metadata (author, timestamp, etc.)
@@ -130,12 +142,30 @@ src/auth.go: Fix user authentication bug
 This resolves the login timeout issue reported in #123.
 ```
 
+### Multi-File Example
+
+For multiple files, the messages adapt:
+
+**First Commit**:
+```
+Add new feature
+
+Changes to target files split into a separate commit  
+```
+
+**Second Commit**:
+```
+target files: Add new feature
+```
+
 ## Safety Features
 
 - **Backup Branch**: Automatically creates `<current-branch>-backup-<pid>` before making changes
+- **Recovery Instructions**: Prints recovery commands upfront so you know how to get back
+- **Conflict Detection**: Warns about potential conflicts before starting and provides guidance during rebase
 - **Dry Run**: Always preview changes first with `--dry-run`
 - **No Action**: If no commits need splitting, tool exits cleanly without changes
-- **Git Integration**: Uses standard git commands for reliability
+- **Git Integration**: Uses standard git interactive rebase for reliability
 
 ## Edge Cases Handled
 
@@ -211,14 +241,15 @@ git checkout <current-branch>-backup-<pid>
 
 ## Limitations
 
-- Currently uses cherry-pick approach rather than true interactive rebase
 - Security warnings in linter due to dynamic git commands (by design)
 - File permissions in tests may trigger security warnings (test-only)
+- Directory extraction uses prefix matching (files must be under the specified directory)
 
 ## Roadmap
 
-- [ ] Support for multiple target files
-- [ ] Integration with `git rebase -i` for better conflict handling  
+- [x] Support for multiple target files
+- [x] Integration with `git rebase -i` for better conflict handling  
 - [ ] Preservation of commit signatures
 - [ ] Support for binary files
 - [ ] Interactive mode for commit selection
+- [ ] Glob pattern support (e.g., `*.tsx`, `**/*.test.js`)
