@@ -60,12 +60,20 @@ func (a *Analyzer) AnalyzeRange(from, to string) ([]CommitInfo, error) {
 
 // analyzeCommit analyzes a single commit to determine if it needs splitting
 func (a *Analyzer) analyzeCommit(hash string) (CommitInfo, error) {
-	// Get commit message
+	// Get commit message and author
 	cmd := exec.Command("git", "log", "--format=%B", "-n", "1", hash)
 	cmd.Dir = a.repoDir
 	msgOutput, err := cmd.Output()
 	if err != nil {
 		return CommitInfo{}, fmt.Errorf("failed to get commit message: %w", err)
+	}
+
+	// Get author information
+	cmd = exec.Command("git", "log", "--format=%an <%ae>", "-n", "1", hash)
+	cmd.Dir = a.repoDir
+	authorOutput, err := cmd.Output()
+	if err != nil {
+		return CommitInfo{}, fmt.Errorf("failed to get commit author: %w", err)
 	}
 
 	// Get files changed in commit
@@ -93,6 +101,7 @@ func (a *Analyzer) analyzeCommit(hash string) (CommitInfo, error) {
 	return CommitInfo{
 		Hash:       hash,
 		Message:    strings.TrimSpace(string(msgOutput)),
+		Author:     strings.TrimSpace(string(authorOutput)),
 		Files:      files,
 		NeedsSplit: hasTargetFile && hasOtherFiles,
 	}, nil
@@ -117,6 +126,7 @@ func (a *Analyzer) isTargetFile(file string) bool {
 type Extractor struct {
 	repoDir     string
 	targetFiles []string
+	debug       bool
 }
 
 // NewExtractor creates a new commit extractor
@@ -124,6 +134,19 @@ func NewExtractor(repoDir string, targetFiles ...string) *Extractor {
 	return &Extractor{
 		repoDir:     repoDir,
 		targetFiles: targetFiles,
+		debug:       false,
+	}
+}
+
+// SetDebug enables or disables debug output
+func (e *Extractor) SetDebug(debug bool) {
+	e.debug = debug
+}
+
+// debugf prints debug output if debug mode is enabled
+func (e *Extractor) debugf(format string, args ...interface{}) {
+	if e.debug {
+		fmt.Printf("🔧 DEBUG: "+format, args...)
 	}
 }
 
@@ -353,55 +376,115 @@ func (e *Extractor) splitCommitUsingInteractiveRebase(commit CommitInfo, from st
 
 // splitCurrentCommit splits the current commit during a rebase
 func (e *Extractor) splitCurrentCommit(commit CommitInfo) error {
+	e.debugf("Starting to split commit %s\n", commit.Hash[:7])
+	
 	// Reset the commit but keep the changes in the working directory
+	e.debugf("Resetting commit to HEAD^\n")
 	cmd := exec.Command("git", "reset", "HEAD^")
 	cmd.Dir = e.repoDir
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to reset commit: %w", err)
 	}
 	
+	// Show what's in working directory after reset
+	e.debugGitStatus("After resetting commit")
+	
 	firstMsg, secondMsg := GenerateSplitMessages(commit.Message, e.targetFiles)
 
-	// Stage all files except the target file
+	// Stage all files except the target files
+	e.debugf("Staging all files with 'git add .'\n")
 	cmd = exec.Command("git", "add", ".")
 	cmd.Dir = e.repoDir
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to stage files: %w", err)
 	}
 
+	// Show what's staged after add .
+	e.debugGitStatus("After staging all files")
+
 	// Unstage the target files
+	e.debugf("Unstaging target files: %v\n", e.targetFiles)
 	for _, targetFile := range e.targetFiles {
+		e.debugf("Running 'git reset HEAD %s'\n", targetFile)
 		cmd = exec.Command("git", "reset", "HEAD", targetFile)
 		cmd.Dir = e.repoDir
-		if err := cmd.Run(); err != nil {
-			// Ignore errors for files that don't exist in this commit
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			e.debugf("Reset failed for %s: %v, output: %s\n", targetFile, err, string(output))
+			// Continue anyway - file might not be staged
 			continue
 		}
+		e.debugf("Reset successful for %s, output: %s\n", targetFile, string(output))
 	}
 
-	// Create first commit (everything except target file)
-	cmd = exec.Command("git", "commit", "-m", firstMsg)
+	// Show what's staged after unstaging target files
+	e.debugGitStatus("After unstaging target files")
+
+	// Create first commit (everything except target files)
+	e.debugf("Creating first commit with message: %q\n", firstMsg)
+	e.debugf("Preserving author: %s\n", commit.Author)
+	cmd = exec.Command("git", "commit", "-m", firstMsg, "--author", commit.Author)
 	cmd.Dir = e.repoDir
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to create first split commit: %w", err)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		e.debugf("First commit failed: %v, output: %s\n", err, string(output))
+		return fmt.Errorf("failed to create first split commit: %w, output: %s", err, string(output))
 	}
+	e.debugf("First commit successful, output: %s\n", string(output))
 
-	// Add and commit the target files
+	// Show repo state after first commit
+	e.debugGitStatus("After first commit")
+
+	// Add the target files back
+	e.debugf("Adding target files back\n")
+	targetFilesAdded := 0
 	for _, targetFile := range e.targetFiles {
+		e.debugf("Running 'git add %s'\n", targetFile)
 		cmd = exec.Command("git", "add", targetFile)
 		cmd.Dir = e.repoDir
-		if err := cmd.Run(); err != nil {
-			// Ignore errors for files that don't exist in this commit
-			continue
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			// If normal add fails, try with --force to handle .gitignore'd files
+			e.debugf("Add failed for %s: %v, output: %s\n", targetFile, err, string(output))
+			e.debugf("Retrying with 'git add --force %s'\n", targetFile)
+			cmd = exec.Command("git", "add", "--force", targetFile)
+			cmd.Dir = e.repoDir
+			output, err = cmd.CombinedOutput()
+			if err != nil {
+				e.debugf("Force add also failed for %s: %v, output: %s\n", targetFile, err, string(output))
+				// Continue anyway - file might not exist in working dir
+				continue
+			}
+			e.debugf("Force add successful for %s, output: %s\n", targetFile, string(output))
+		} else {
+			e.debugf("Add successful for %s, output: %s\n", targetFile, string(output))
 		}
+		targetFilesAdded++
 	}
 
-	cmd = exec.Command("git", "commit", "-m", secondMsg)
+	e.debugf("Successfully added %d target files\n", targetFilesAdded)
+	
+	// Show what's staged before second commit
+	e.debugGitStatus("Before second commit")
+
+	// Check if we have anything to commit
+	if targetFilesAdded == 0 {
+		return fmt.Errorf("no target files were successfully staged for second commit")
+	}
+
+	// Create second commit (target files only)
+	e.debugf("Creating second commit with message: %q\n", secondMsg)
+	e.debugf("Preserving author: %s\n", commit.Author)
+	cmd = exec.Command("git", "commit", "-m", secondMsg, "--author", commit.Author)
 	cmd.Dir = e.repoDir
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to create second split commit: %w", err)
+	output, err = cmd.CombinedOutput()
+	if err != nil {
+		e.debugf("Second commit failed: %v, output: %s\n", err, string(output))
+		return fmt.Errorf("failed to create second split commit: %w, output: %s", err, string(output))
 	}
+	e.debugf("Second commit successful, output: %s\n", string(output))
 
+	e.debugf("Commit splitting completed successfully\n")
 	return nil
 }
 
@@ -434,7 +517,7 @@ func (e *Extractor) splitHeadCommit(commit CommitInfo) error {
 	}
 
 	// Create first commit (everything except target file)
-	cmd = exec.Command("git", "commit", "-m", firstMsg)
+	cmd = exec.Command("git", "commit", "-m", firstMsg, "--author", commit.Author)
 	cmd.Dir = e.repoDir
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to create first split commit: %w", err)
@@ -445,12 +528,17 @@ func (e *Extractor) splitHeadCommit(commit CommitInfo) error {
 		cmd = exec.Command("git", "add", targetFile)
 		cmd.Dir = e.repoDir
 		if err := cmd.Run(); err != nil {
-			// Ignore errors for files that don't exist in this commit
-			continue
+			// If normal add fails, try with --force to handle .gitignore'd files
+			cmd = exec.Command("git", "add", "--force", targetFile)
+			cmd.Dir = e.repoDir
+			if err := cmd.Run(); err != nil {
+				// Ignore errors for files that don't exist in working dir
+				continue
+			}
 		}
 	}
 
-	cmd = exec.Command("git", "commit", "-m", secondMsg)
+	cmd = exec.Command("git", "commit", "-m", secondMsg, "--author", commit.Author)
 	cmd.Dir = e.repoDir
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to create second split commit: %w", err)
@@ -566,5 +654,44 @@ func (e *Extractor) checkPotentialConflicts(from string) []string {
 	}
 
 	return potentialConflicts
+}
+
+// debugGitStatus shows the current git status for debugging
+func (e *Extractor) debugGitStatus(label string) {
+	e.debugf("Git status %s:\n", label)
+	
+	// Get porcelain status
+	cmd := exec.Command("git", "status", "--porcelain")
+	cmd.Dir = e.repoDir
+	output, err := cmd.Output()
+	if err != nil {
+		e.debugf("Failed to get git status: %v\n", err)
+		return
+	}
+
+	status := string(output)
+	if status == "" {
+		e.debugf("Working directory clean\n")
+	} else {
+		e.debugf("Status output:\n%s", status)
+	}
+	
+	// Also show what's staged specifically
+	cmd = exec.Command("git", "diff", "--cached", "--name-status")
+	cmd.Dir = e.repoDir
+	output, err = cmd.Output()
+	if err != nil {
+		e.debugf("Failed to get staged changes: %v\n", err)
+		return
+	}
+	
+	staged := string(output)
+	if staged == "" {
+		e.debugf("No staged changes\n")
+	} else {
+		e.debugf("Staged changes:\n%s", staged)
+	}
+	
+	e.debugf("---\n")
 }
 

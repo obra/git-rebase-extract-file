@@ -36,7 +36,7 @@ sudo cp bin/git-rebase-extract-file /usr/local/bin/
 ### Basic Syntax
 
 ```bash
-git-rebase-extract-file [--dry-run] <previous-rev> <file-path> [file-path...]
+git-rebase-extract-file [--dry-run] [--debug] <previous-rev> <file-path> [file-path...]
 ```
 
 ### Arguments
@@ -50,6 +50,7 @@ git-rebase-extract-file [--dry-run] <previous-rev> <file-path> [file-path...]
 ### Options
 
 - `--dry-run`: Preview what would be done without making any changes
+- `--debug`: Enable detailed debug output for troubleshooting
 
 ## Examples
 

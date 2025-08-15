@@ -14,10 +14,11 @@ import (
 
 var (
 	dryRun bool
+	debug  bool
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "git-rebase-extract-file [--dry-run] <previous-rev> <file-path> [file-path...]",
+	Use:   "git-rebase-extract-file [--dry-run] [--debug] <previous-rev> <file-path> [file-path...]",
 	Short: "Split commits by extracting changes to specified files/directories",
 	Long: `git-rebase-extract-file performs an interactive rebase that automatically
 splits commits containing changes to specified files or directories. The changes to the target
@@ -33,6 +34,7 @@ Examples:
 
 func init() {
 	rootCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview what would be done without making changes")
+	rootCmd.Flags().BoolVar(&debug, "debug", false, "Enable detailed debug output")
 }
 
 func run(_ *cobra.Command, args []string) error {
@@ -46,6 +48,7 @@ func run(_ *cobra.Command, args []string) error {
 	}
 
 	extractor := rebase.NewExtractor(wd, filePaths...)
+	extractor.SetDebug(debug)
 
 	if dryRun {
 		output, err := extractor.DryRun(previousRev, "HEAD")
